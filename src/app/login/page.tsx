@@ -11,7 +11,7 @@ export default function LoginPage() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'Moussa' && password === 'Saai') {
+    if (username === 'Mousa' && password === 'Saai') {
       sessionStorage.setItem('authenticated', 'true');
       router.push('/');
     } else {
