@@ -48,6 +48,12 @@ export default function GeneratePage() {
     config.current = JSON.parse(stored);
     briefText.current = brief;
 
+    // Auth check
+    if (sessionStorage.getItem('authenticated') !== 'true') {
+      router.push('/login');
+      return;
+    }
+
     if (!hasStarted.current) {
       hasStarted.current = true;
       runPipeline();
@@ -57,12 +63,14 @@ export default function GeneratePage() {
 
   const runPipeline = async () => {
     try {
+      const userApiKey = sessionStorage.getItem('apiKey') || localStorage.getItem('anthropic_api_key') || '';
+
       // Stage 1: Parse brief
       setStage('parsing');
       const parseRes = await fetch('/api/parse-brief', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ briefText: briefText.current }),
+        body: JSON.stringify({ briefText: briefText.current, apiKey: userApiKey }),
       });
       if (!parseRes.ok) throw new Error('Failed to parse brief');
       const parsed: ParsedBrief = await parseRes.json();
@@ -73,19 +81,19 @@ export default function GeneratePage() {
       const outlineRes = await fetch('/api/generate-outline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: parsed, config: config.current }),
+        body: JSON.stringify({ brief: parsed, config: config.current, apiKey: userApiKey }),
       });
       if (!outlineRes.ok) throw new Error('Failed to generate outline');
       const outlineData: Outline = await outlineRes.json();
       setOutline(outlineData);
 
-      // Stage 3: Generate draft (single pass — simple JSON response)
+      // Stage 3: Generate draft (single pass)
       setStage('drafting');
       setDraftProgress('Generating full draft in single pass...');
       const draftRes = await fetch('/api/generate-draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outline: outlineData, config: config.current }),
+        body: JSON.stringify({ outline: outlineData, config: config.current, apiKey: userApiKey }),
       });
 
       if (!draftRes.ok) throw new Error('Failed to generate draft');
@@ -96,13 +104,13 @@ export default function GeneratePage() {
       setDisplayText(draft);
       setDraftProgress(`Generated ${draftData.wordCount} words`);
 
-      // Stage 4: Adversarial Paraphrase (LLM, temp 1.0 — the key bypass step)
+      // Stage 4: Adversarial Paraphrase
       setStage('paraphrasing');
       setDraftProgress('Rewriting with vocabulary disruption...');
       const paraphraseRes = await fetch('/api/paraphrase', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft }),
+        body: JSON.stringify({ draft, apiKey: userApiKey }),
       });
       if (!paraphraseRes.ok) throw new Error('Failed to paraphrase');
       const paraphraseData = await paraphraseRes.json();

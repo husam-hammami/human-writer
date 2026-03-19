@@ -3,9 +3,10 @@ import type { ParsedBrief, Outline, PipelineConfig } from './types';
 
 export async function generateOutline(
   brief: ParsedBrief,
-  config: PipelineConfig
+  config: PipelineConfig,
+  apiKey?: string,
 ): Promise<Outline> {
-  const client = getAnthropicClient();
+  const client = getAnthropicClient(apiKey);
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',

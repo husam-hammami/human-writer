@@ -2,8 +2,8 @@ import { getAnthropicClient } from '../anthropic';
 import { buildBriefParserPrompt } from '../prompts/brief-parser';
 import type { ParsedBrief } from './types';
 
-export async function parseBrief(briefText: string): Promise<ParsedBrief> {
-  const client = getAnthropicClient();
+export async function parseBrief(briefText: string, apiKey?: string): Promise<ParsedBrief> {
+  const client = getAnthropicClient(apiKey);
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',

@@ -205,8 +205,8 @@ function splitIntoParaphraseChunks(text: string): string[] {
   return chunks;
 }
 
-async function paraphraseChunk(chunk: string, chunkIndex: number, totalChunks: number): Promise<string> {
-  const client = getAnthropicClient();
+async function paraphraseChunk(chunk: string, chunkIndex: number, totalChunks: number, apiKey?: string): Promise<string> {
+  const client = getAnthropicClient(apiKey);
   const inputWords = chunk.split(/\s+/).length;
 
   const response = await client.messages.create({
@@ -231,6 +231,7 @@ async function paraphraseChunk(chunk: string, chunkIndex: number, totalChunks: n
 export async function paraphraseText(
   draft: string,
   onProgress?: (chunkIndex: number, totalChunks: number) => void,
+  apiKey?: string,
 ): Promise<string> {
   const chunks = splitIntoParaphraseChunks(draft);
   console.log(`Paraphrasing ${chunks.length} chunks...`);
@@ -252,7 +253,7 @@ export async function paraphraseText(
       continue;
     }
 
-    const result = await paraphraseChunk(chunks[i], i, chunks.length);
+    const result = await paraphraseChunk(chunks[i], i, chunks.length, apiKey);
     paraphrased.push(result);
 
     if (i < chunks.length - 1) {

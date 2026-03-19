@@ -4,16 +4,17 @@ import type { ParsedBrief, PipelineConfig } from '@/lib/pipeline/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { brief, config } = await req.json() as {
+    const { brief, config, apiKey } = await req.json() as {
       brief: ParsedBrief;
       config: PipelineConfig;
+      apiKey?: string;
     };
 
     if (!brief || !config) {
       return NextResponse.json({ error: 'brief and config are required' }, { status: 400 });
     }
 
-    const outline = await generateOutline(brief, config);
+    const outline = await generateOutline(brief, config, apiKey);
     return NextResponse.json(outline);
   } catch (error) {
     console.error('Generate outline error:', error);

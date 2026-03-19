@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PipelineConfig } from '@/lib/pipeline/types';
 
@@ -8,6 +8,8 @@ export default function HomePage() {
   const router = useRouter();
   const [briefText, setBriefText] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [apiKey, setApiKey] = useState('');
   const [config, setConfig] = useState<PipelineConfig>({
     tone: 'academic-formal',
     academicLevel: 'postgraduate',
@@ -15,6 +17,21 @@ export default function HomePage() {
     citationStyle: 'chicago-18th',
     discipline: 'Marketing',
   });
+
+  // Auth check
+  useEffect(() => {
+    if (typeof window !== 'undefined' && sessionStorage.getItem('authenticated') !== 'true') {
+      router.push('/login');
+    }
+    // Load saved API key
+    const saved = localStorage.getItem('anthropic_api_key');
+    if (saved) setApiKey(saved);
+  }, [router]);
+
+  const handleSaveApiKey = () => {
+    localStorage.setItem('anthropic_api_key', apiKey);
+    setShowSettings(false);
+  };
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.endsWith('.docx')) {
@@ -50,15 +67,53 @@ export default function HomePage() {
       alert('Please enter or upload an assignment brief');
       return;
     }
+    const savedKey = localStorage.getItem('anthropic_api_key');
+    if (!savedKey) {
+      setShowSettings(true);
+      alert('Please set your Anthropic API key first');
+      return;
+    }
     sessionStorage.setItem('briefText', briefText);
     sessionStorage.setItem('config', JSON.stringify(config));
+    sessionStorage.setItem('apiKey', savedKey);
     router.push('/generate');
   };
 
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowSettings(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-white">Settings</h2>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Anthropic API Key</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none font-mono"
+              />
+              <p className="text-xs text-gray-500 mt-1">Your key is stored locally in your browser. Never sent to our servers.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={handleSaveApiKey} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm cursor-pointer">Save</button>
+              <button onClick={() => setShowSettings(false)} className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm cursor-pointer">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Hero Header */}
-      <header className="px-6 pt-3 pb-1">
+      <header className="px-6 pt-3 pb-1 relative">
+        <button
+          onClick={() => setShowSettings(true)}
+          className="absolute top-4 right-6 p-2 text-gray-500 hover:text-gray-300 transition-colors cursor-pointer"
+          title="Settings"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
         <div className="max-w-6xl mx-auto flex flex-col items-center text-center gap-1">
           <img src="/logo.png" alt="Humanizer" className="h-40 w-auto drop-shadow-[0_0_60px_rgba(99,102,241,0.5)]" />
           <div>

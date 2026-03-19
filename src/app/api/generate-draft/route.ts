@@ -4,25 +4,24 @@ import type { Outline, PipelineConfig } from '@/lib/pipeline/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { outline, config } = await req.json() as {
+    const { outline, config, apiKey } = await req.json() as {
       outline: Outline;
       config: PipelineConfig;
+      apiKey?: string;
     };
 
     if (!outline || !config) {
       return NextResponse.json({ error: 'outline and config are required' }, { status: 400 });
     }
 
-    // Single-pass generation — no SSE needed, just return the result
     let fullDraft: string;
     if (config.wordCount > 6000) {
-      fullDraft = await generateLongDraft(outline, config);
+      fullDraft = await generateLongDraft(outline, config, undefined, apiKey);
     } else {
-      fullDraft = await generateDraft(outline, config);
+      fullDraft = await generateDraft(outline, config, apiKey);
     }
 
     const wordCount = fullDraft.split(/\s+/).filter(Boolean).length;
-
     return NextResponse.json({ fullDraft, wordCount });
   } catch (error) {
     console.error('Generate draft error:', error);
