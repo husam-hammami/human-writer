@@ -29,48 +29,115 @@ export default function HomePage() {
   }, [router]);
 
   const handleSaveApiKey = () => {
-    localStorage.setItem('anthropic_api_key', apiKey);
+    if (!apiKey.trim()) {
+      return;
+    }
+    localStorage.setItem('anthropic_api_key', apiKey.trim());
+    setGenerateError('');
     setShowSettings(false);
   };
 
-  const handleFileUpload = useCallback(async (file: File) => {
-    if (!file.name.endsWith('.docx')) {
-      alert('Please upload a .docx file');
+  const handleCancelSettings = () => {
+    // Revert to saved key so unsaved edits don't linger
+    const saved = localStorage.getItem('anthropic_api_key');
+    setApiKey(saved || '');
+    setShowSettings(false);
+  };
+
+  const [uploadError, setUploadError] = useState('');
+  const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  const [uploadProgress, setUploadProgress] = useState('');
+
+  const handleFiles = useCallback(async (files: File[]) => {
+    setUploadError('');
+
+    // Validate all files first
+    const errors: string[] = [];
+    const validFiles: File[] = [];
+    for (const file of files) {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      if (ext !== 'docx') {
+        errors.push(`"${file.name}" — unsupported type (.${ext})`);
+      } else if (file.size > 10 * 1024 * 1024) {
+        errors.push(`"${file.name}" — too large (max 10 MB)`);
+      } else {
+        validFiles.push(file);
+      }
+    }
+
+    if (errors.length > 0 && validFiles.length === 0) {
+      setUploadError(`Only .docx files are supported.\n${errors.join('\n')}`);
       return;
     }
+
     setIsUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/upload-brief', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (data.text) {
-        setBriefText(data.text);
-      } else {
-        alert('Failed to parse file: ' + (data.error || 'Unknown error'));
+    const extractedTexts: string[] = [];
+    const newFileNames: string[] = [];
+    const fileErrors: string[] = [];
+
+    for (let i = 0; i < validFiles.length; i++) {
+      const file = validFiles[i];
+      setUploadProgress(`Parsing ${i + 1} of ${validFiles.length}: ${file.name}...`);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload-brief', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.text && data.text.trim()) {
+          extractedTexts.push(data.text.trim());
+          newFileNames.push(file.name);
+        } else {
+          fileErrors.push(`"${file.name}" — empty or could not extract text`);
+        }
+      } catch {
+        fileErrors.push(`"${file.name}" — upload failed (network error)`);
       }
-    } catch {
-      alert('Failed to upload file');
-    } finally {
-      setIsUploading(false);
     }
+
+    if (extractedTexts.length > 0) {
+      setBriefText(prev => {
+        const combined = prev.trim();
+        const newText = extractedTexts.join('\n\n---\n\n');
+        return combined ? `${combined}\n\n---\n\n${newText}` : newText;
+      });
+      setUploadedFiles(prev => [...prev, ...newFileNames]);
+    }
+
+    // Show errors for any files that failed, alongside successes
+    const messages: string[] = [];
+    if (errors.length > 0) messages.push(...errors);
+    if (fileErrors.length > 0) messages.push(...fileErrors);
+    if (messages.length > 0) {
+      const successCount = extractedTexts.length;
+      const prefix = successCount > 0
+        ? `${successCount} file${successCount > 1 ? 's' : ''} added successfully, but:\n`
+        : '';
+      setUploadError(prefix + messages.join('\n'));
+    }
+
+    setUploadProgress('');
+    setIsUploading(false);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(file);
-  }, [handleFileUpload]);
+    if (isUploading) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) handleFiles(files);
+  }, [handleFiles, isUploading]);
+
+  const [generateError, setGenerateError] = useState('');
 
   const handleGenerate = () => {
+    setGenerateError('');
     if (!briefText.trim()) {
-      alert('Please enter or upload an assignment brief');
+      setGenerateError('Please enter or upload an assignment brief first.');
       return;
     }
     const savedKey = localStorage.getItem('anthropic_api_key');
     if (!savedKey) {
       setShowSettings(true);
-      alert('Please set your Anthropic API key first');
+      setGenerateError('API key required — please enter your Anthropic API key in the settings panel that just opened.');
       return;
     }
     sessionStorage.setItem('briefText', briefText);
@@ -83,7 +150,7 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col">
       {/* Settings Modal */}
       {showSettings && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowSettings(false)}>
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={handleCancelSettings}>
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md space-y-4" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-white">Settings</h2>
             <div>
@@ -95,11 +162,11 @@ export default function HomePage() {
                 placeholder="sk-ant-api03-..."
                 className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-200 focus:border-indigo-500 focus:outline-none font-mono"
               />
-              <p className="text-xs text-gray-500 mt-1">Your key is stored locally in your browser. Never sent to our servers.</p>
+              <p className="text-xs text-gray-500 mt-1">Your key is stored locally in your browser and sent only to the Anthropic API.</p>
             </div>
             <div className="flex gap-3">
               <button onClick={handleSaveApiKey} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm cursor-pointer">Save</button>
-              <button onClick={() => setShowSettings(false)} className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm cursor-pointer">Cancel</button>
+              <button onClick={handleCancelSettings} className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm cursor-pointer">Cancel</button>
             </div>
           </div>
         </div>
@@ -133,7 +200,7 @@ export default function HomePage() {
             <div>
               <h2 className="text-lg font-semibold text-white mb-2">Assignment Brief</h2>
               <p className="text-sm text-gray-400 mb-4">
-                Paste your assignment instructions below or upload a .docx file
+                Paste your assignment instructions below or upload .docx files
               </p>
             </div>
 
@@ -141,29 +208,53 @@ export default function HomePage() {
             <div
               onDrop={handleDrop}
               onDragOver={(e) => e.preventDefault()}
-              className="border-2 border-dashed border-gray-700 rounded-xl p-6 text-center hover:border-indigo-500 transition-colors cursor-pointer"
+              className={`border-2 border-dashed border-gray-700 rounded-xl p-6 text-center transition-colors ${
+                isUploading ? 'opacity-50 cursor-not-allowed' : 'hover:border-indigo-500 cursor-pointer'
+              }`}
               onClick={() => {
+                if (isUploading) return;
                 const input = document.createElement('input');
                 input.type = 'file';
                 input.accept = '.docx';
+                input.multiple = true;
                 input.onchange = (e) => {
-                  const file = (e.target as HTMLInputElement).files?.[0];
-                  if (file) handleFileUpload(file);
+                  const files = Array.from((e.target as HTMLInputElement).files || []);
+                  if (files.length > 0) handleFiles(files);
                 };
                 input.click();
               }}
             >
               {isUploading ? (
-                <div className="text-indigo-400">Parsing document...</div>
+                <div className="text-indigo-400">{uploadProgress || 'Parsing document...'}</div>
               ) : (
                 <div className="space-y-2">
                   <div className="text-gray-400 text-3xl">+</div>
                   <div className="text-gray-400 text-sm">
-                    Drop .docx file here or click to upload
+                    Drop .docx files here or click to upload (multiple supported)
                   </div>
                 </div>
               )}
             </div>
+
+            {/* Uploaded Files */}
+            {uploadedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {uploadedFiles.map((name, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/30 rounded-lg text-xs text-indigo-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    {name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Upload Error */}
+            {uploadError && (
+              <div className="p-3 rounded-lg border border-red-800 bg-red-900/20 text-sm text-red-300 flex items-start gap-2">
+                <span className="text-red-400 mt-0.5">✕</span>
+                <span className="whitespace-pre-line">{uploadError}</span>
+              </div>
+            )}
 
             {/* Text Area */}
             <textarea
@@ -268,6 +359,13 @@ Include:
                 className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-indigo-500"
               />
             </div>
+
+            {/* Generate Error */}
+            {generateError && (
+              <div className="p-3 rounded-lg border border-amber-800 bg-amber-900/20 text-sm text-amber-300">
+                {generateError}
+              </div>
+            )}
 
             {/* Generate Button */}
             <button

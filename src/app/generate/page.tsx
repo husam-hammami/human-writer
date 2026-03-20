@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import type { PipelineConfig, ParsedBrief, Outline, DetectionResult, IterationState } from '@/lib/pipeline/types';
+import type { PipelineConfig, ParsedBrief, Outline } from '@/lib/pipeline/types';
 
 function countWords(text: string): number {
   return text.split(/\s+/).filter(w => w.length > 0).length;
@@ -14,7 +14,7 @@ const STAGES = [
   { key: 'parsing', label: 'Parse Brief', description: 'Analyzing assignment requirements' },
   { key: 'outlining', label: 'Create Outline', description: 'Designing section structure' },
   { key: 'drafting', label: 'Generate Draft', description: 'Writing full assignment' },
-  { key: 'paraphrasing', label: 'Humanize', description: 'Undetectable.ai neural humanization' },
+  { key: 'paraphrasing', label: 'Humanize', description: 'Adversarial vocabulary disruption' },
   { key: 'polishing', label: 'Polish', description: 'ESL markers & cleanup' },
 ] as const;
 
@@ -26,19 +26,24 @@ export default function GeneratePage() {
   const [outline, setOutline] = useState<Outline | null>(null);
   const [fullDraft, setFullDraft] = useState('');
   const [polishedText, setPolishedText] = useState('');
-  const [detectionResult, setDetectionResult] = useState<DetectionResult | null>(null);
-  const [iterationState, setIterationState] = useState<IterationState | null>(null);
   const [polishStats, setPolishStats] = useState<Record<string, unknown> | null>(null);
   const [displayText, setDisplayText] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [draftProgress, setDraftProgress] = useState('');
   const outputRef = useRef<HTMLDivElement>(null);
   const hasStarted = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const config = useRef<PipelineConfig | null>(null);
   const briefText = useRef<string>('');
 
   useEffect(() => {
+    // Auth check first
+    if (sessionStorage.getItem('authenticated') !== 'true') {
+      router.push('/login');
+      return;
+    }
+
     const stored = sessionStorage.getItem('config');
     const brief = sessionStorage.getItem('briefText');
     if (!stored || !brief) {
@@ -48,57 +53,82 @@ export default function GeneratePage() {
     config.current = JSON.parse(stored);
     briefText.current = brief;
 
-    // Auth check
-    if (sessionStorage.getItem('authenticated') !== 'true') {
-      router.push('/login');
-      return;
-    }
-
     if (!hasStarted.current) {
       hasStarted.current = true;
       runPipeline();
     }
+
+    return () => {
+      // Cancel in-flight requests on unmount
+      abortControllerRef.current?.abort();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Warn user before leaving during pipeline execution
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (stage !== 'idle' && stage !== 'complete' && stage !== 'error') {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [stage]);
+
+  /** Helper: fetch an API route and throw a descriptive error if it fails */
+  const apiFetch = async (url: string, body: Record<string, unknown>, stageName: string, signal?: AbortSignal) => {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!res.ok) {
+      let detail = `Failed at "${stageName}" (HTTP ${res.status})`;
+      try {
+        const errData = await res.json();
+        if (errData.error) detail = errData.error;
+        if (errData.code === 'INVALID_API_KEY' || errData.code === 'NO_API_KEY') {
+          detail += '\n\nGo back and click the ⚙ gear icon to update your API key.';
+        }
+        if (errData.code === 'INSUFFICIENT_FUNDS') {
+          detail += '\n\nVisit console.anthropic.com to add credits.';
+        }
+      } catch { /* response wasn't JSON */ }
+      throw new Error(detail);
+    }
+    return res.json();
+  };
+
   const runPipeline = async () => {
+    // Cancel any previous in-flight requests
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const { signal } = controller;
+
     try {
       const userApiKey = sessionStorage.getItem('apiKey') || localStorage.getItem('anthropic_api_key') || '';
 
+      if (!userApiKey) {
+        throw new Error('No API key found. Go back and click the ⚙ gear icon (top-right) to set your Anthropic API key.');
+      }
+
       // Stage 1: Parse brief
       setStage('parsing');
-      const parseRes = await fetch('/api/parse-brief', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ briefText: briefText.current, apiKey: userApiKey }),
-      });
-      if (!parseRes.ok) throw new Error('Failed to parse brief');
-      const parsed: ParsedBrief = await parseRes.json();
+      const parsed: ParsedBrief = await apiFetch('/api/parse-brief', { briefText: briefText.current, apiKey: userApiKey }, 'Parse Brief', signal);
       setParsedBrief(parsed);
 
       // Stage 2: Generate outline
       setStage('outlining');
-      const outlineRes = await fetch('/api/generate-outline', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brief: parsed, config: config.current, apiKey: userApiKey }),
-      });
-      if (!outlineRes.ok) throw new Error('Failed to generate outline');
-      const outlineData: Outline = await outlineRes.json();
+      const outlineData: Outline = await apiFetch('/api/generate-outline', { brief: parsed, config: config.current, apiKey: userApiKey }, 'Generate Outline', signal);
       setOutline(outlineData);
 
       // Stage 3: Generate draft (single pass)
       setStage('drafting');
       setDraftProgress('Generating full draft in single pass...');
-      const draftRes = await fetch('/api/generate-draft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outline: outlineData, config: config.current, apiKey: userApiKey }),
-      });
-
-      if (!draftRes.ok) throw new Error('Failed to generate draft');
-
-      const draftData = await draftRes.json();
+      const draftData = await apiFetch('/api/generate-draft', { outline: outlineData, config: config.current, apiKey: userApiKey }, 'Generate Draft', signal);
       let draft = draftData.fullDraft as string;
       setFullDraft(draft);
       setDisplayText(draft);
@@ -107,26 +137,14 @@ export default function GeneratePage() {
       // Stage 4: Adversarial Paraphrase
       setStage('paraphrasing');
       setDraftProgress('Rewriting with vocabulary disruption...');
-      const paraphraseRes = await fetch('/api/paraphrase', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft, apiKey: userApiKey }),
-      });
-      if (!paraphraseRes.ok) throw new Error('Failed to paraphrase');
-      const paraphraseData = await paraphraseRes.json();
+      const paraphraseData = await apiFetch('/api/paraphrase', { draft, apiKey: userApiKey }, 'Humanize', signal);
       const paraphrasedText = paraphraseData.paraphrasedText as string;
       setDisplayText(paraphrasedText);
       setDraftProgress(`Paraphrased: ${paraphraseData.wordCount} words`);
 
       // Stage 5: Polish (programmatic, NO LLM — fast)
       setStage('polishing');
-      const polishRes = await fetch('/api/polish', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft: paraphrasedText || draft }),
-      });
-      if (!polishRes.ok) throw new Error('Failed to polish text');
-      const polishData = await polishRes.json();
+      const polishData = await apiFetch('/api/polish', { draft: paraphrasedText || draft }, 'Polish', signal);
       setPolishedText(polishData.polishedText);
       setPolishStats(polishData.stats);
       setDisplayText(polishData.polishedText);
@@ -136,6 +154,7 @@ export default function GeneratePage() {
 
       setStage('complete');
     } catch (err) {
+      if (signal.aborted) return; // Don't show error if we intentionally cancelled
       setError(err instanceof Error ? err.message : 'Pipeline failed');
       setStage('error');
     }
@@ -156,7 +175,8 @@ export default function GeneratePage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${title.replace(/[^a-zA-Z0-9 ]/g, '')}.docx`;
+      const safeTitle = title.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'Assignment';
+      a.download = `${safeTitle}.docx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -208,16 +228,10 @@ export default function GeneratePage() {
     setOutline(null);
     setFullDraft('');
     setPolishedText('');
-    setDetectionResult(null);
-    setIterationState(null);
     setPolishStats(null);
     setDisplayText('');
     setDraftProgress('');
-    hasStarted.current = false;
-    setTimeout(() => {
-      hasStarted.current = true;
-      runPipeline();
-    }, 100);
+    runPipeline();
   };
 
   const getStageStatus = (stageKey: string): 'pending' | 'active' | 'complete' | 'error' => {
@@ -233,18 +247,6 @@ export default function GeneratePage() {
     if (checkIdx < currentIdx) return 'complete';
     if (checkIdx === currentIdx) return 'active';
     return 'pending';
-  };
-
-  const getScoreColor = (score: number) => {
-    if (score >= 90) return 'text-green-400 border-green-500 bg-green-500/10';
-    if (score >= 70) return 'text-yellow-400 border-yellow-500 bg-yellow-500/10';
-    return 'text-red-400 border-red-500 bg-red-500/10';
-  };
-
-  const getParaScoreColor = (score: number) => {
-    if (score >= 80) return 'bg-green-500';
-    if (score >= 60) return 'bg-yellow-500';
-    return 'bg-red-500';
   };
 
   const wordCount = (polishedText || displayText).split(/\s+/).filter(Boolean).length;
@@ -317,8 +319,23 @@ export default function GeneratePage() {
 
             {/* Error Display */}
             {error && (
-              <div className="p-3 rounded-lg border border-red-800 bg-red-900/20 text-sm text-red-300">
-                {error}
+              <div className="p-4 rounded-lg border border-red-800 bg-red-900/20 space-y-3">
+                <div className="text-sm font-medium text-red-300">Something went wrong</div>
+                <div className="text-sm text-red-200/80 whitespace-pre-line">{error}</div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => router.push('/')}
+                    className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-lg text-xs cursor-pointer"
+                  >
+                    ← Go Back
+                  </button>
+                  <button
+                    onClick={handleRegenerate}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
               </div>
             )}
 
@@ -420,7 +437,7 @@ export default function GeneratePage() {
                       {stage === 'parsing' && 'Analyzing your assignment brief...'}
                       {stage === 'outlining' && 'Creating section structure...'}
                       {stage === 'drafting' && 'Writing full assignment in single pass...'}
-                      {stage === 'paraphrasing' && 'Humanizing with Undetectable.ai...'}
+                      {stage === 'paraphrasing' && 'Rewriting with vocabulary disruption...'}
                       {stage === 'polishing' && 'Applying ESL markers and cleanup...'}
                       {stage === 'detecting' && 'Checking per-paragraph AI detection scores...'}
                       {stage === 'iterating' && 'Regenerating flagged paragraphs...'}

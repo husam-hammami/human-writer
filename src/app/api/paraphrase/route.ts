@@ -1,21 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { paraphraseText } from '@/lib/pipeline/paraphrase';
+import { classifyAnthropicError } from '@/lib/anthropic';
 
 export async function POST(req: NextRequest) {
+  let body;
   try {
-    const { draft, apiKey } = await req.json();
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body', code: 'VALIDATION' }, { status: 400 });
+  }
+
+  try {
+    const { draft, apiKey } = body;
     if (!draft || typeof draft !== 'string') {
-      return NextResponse.json({ error: 'draft text is required' }, { status: 400 });
+      return NextResponse.json({ error: 'draft text is required', code: 'VALIDATION' }, { status: 400 });
     }
 
     const result = await paraphraseText(draft, undefined, apiKey);
     const wordCount = result.split(/\s+/).filter(Boolean).length;
     return NextResponse.json({ paraphrasedText: result, wordCount, provider: 'claude-paraphrase' });
   } catch (error) {
-    console.error('Paraphrase error:', error);
+    console.error('Paraphrase error:', (error as Error).message);
+    const classified = classifyAnthropicError(error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Paraphrase failed' },
-      { status: 500 }
+      { error: classified.message, code: classified.code },
+      { status: classified.httpStatus }
     );
   }
 }
